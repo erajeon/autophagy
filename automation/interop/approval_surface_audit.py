@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import stat as stat_module
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -233,9 +234,16 @@ def _classify(flow: Flow, path: Path, record: dict[str, JsonValue]) -> tuple[Aud
 
 
 def _paths(flow: Flow, root: Path) -> tuple[tuple[Path, ...], bool]:
-    if not root.exists():
+    # `Path.exists()`/`is_dir()` swallow PermissionError on newer CPython (the
+    # ignored-errno set pathlib treats as "doesn't exist" grew to match
+    # os.path.exists()'s always-swallow behavior), which would silently turn an
+    # unreadable root into `missing` instead of the `blocking` fail-closed path
+    # below. Stat directly so only genuine absence is treated as `missing`.
+    try:
+        mode = root.stat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
         return (), True
-    if not root.is_dir():
+    if not stat_module.S_ISDIR(mode):
         return (root,), False
     match flow:
         case Flow.MAIL:
