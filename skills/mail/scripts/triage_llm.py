@@ -148,15 +148,20 @@ def call_codex(prompt: str, *, timeout: float = 600.0) -> str:
 def classify(
     *, subject: str, sender: str, body: str, sensitive: bool, uid_opaque: str, prompt_path: Path
 ) -> tuple[triage_core.Classification, str]:
-    """Step-2 classification. Route by the step-1 sensitivity verdict."""
+    """Step-2 classification. Always the non-GLM tier (2026-08-09 owner decision).
+
+    glm-main's LiteLLM model group is wired to an Anthropic key the owner
+    deliberately deactivated as a cost stopgap (never reactivated — see the
+    deferred LiteLLM-stack cleanup); every non-sensitive classify call was
+    401ing. Routing everything through the owner's own ChatGPT Codex
+    subscription (same as reply drafting and the Wired digest) removes the
+    LiteLLM/Anthropic-key dependency entirely, at no extra API cost.
+    """
     prompt = triage_core.build_prompt(
         triage_core.load_prompt_template(prompt_path),
         subject=subject, sender=sender, body=body,
     )
-    if sensitive:
-        raw, provider, model = call_codex(prompt), NON_GLM_PROVIDER, codex_model()
-    else:
-        raw, provider, model = call_glm(prompt, sensitive=False), GLM_MODEL, GLM_MODEL
+    raw, provider, model = call_codex(prompt), NON_GLM_PROVIDER, codex_model()
     _log_call(provider=provider, model=model, purpose="classify",
               uid_opaque=uid_opaque, sensitive=sensitive)
     return triage_core.parse_classification(raw), provider
