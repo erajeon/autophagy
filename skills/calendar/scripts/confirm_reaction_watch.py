@@ -12,6 +12,31 @@ from pathlib import Path
 from typing import Protocol, assert_never
 from urllib.error import HTTPError, URLError
 
+
+def _load_env_secrets(path: Path = Path.home() / ".env.secrets") -> None:
+    """Best-effort ``.env.secrets`` load — Hermes cron does not inject it.
+
+    Same pattern as skills/wiki/scripts/wiki_confirm_reaction_watch.py and
+    skills/todo/scripts/todo_cli.py: AUTOPHAGY_REPO_ROOT (needed lazily by
+    calendar_binding/calendar_confirm for automation.interop resolution) is
+    not reliably present in the cron's process environment. Never overrides
+    an already-set variable.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+
+
+_load_env_secrets()
+
 _SCRIPTS = Path(os.environ.get("CALENDAR_SCRIPTS", "~/.hermes/skills/calendar/scripts")).expanduser()
 if _SCRIPTS.exists() and str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
