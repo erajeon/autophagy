@@ -40,6 +40,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
+import todo_confirm
+import todo_gate
+
 if TYPE_CHECKING:
     from automation.interop.external_effect_gate import ApprovalContext, ExternalEffectDecision
 
@@ -281,6 +284,99 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _execute_confirmed_draft(draft: dict[str, Any]) -> CreatedTask:
+    """Bind an owner-approved draft to a fresh gate record, then reuse create_task.
+
+    Calls the unmodified, already-audited insert+re-read-verify path — this
+    function's only new responsibility is writing the one approval record
+    that path requires (see todo_gate.append_manual_reaction_approval).
+    """
+    request = TaskRequest(
+        draft["tasklist"], draft["title"], draft.get("notes") or None, draft.get("due") or None
+    )
+    decision = evaluate(insert_argv(request), context=approval_context())
+    todo_gate.append_manual_reaction_approval(
+        action_hash=decision.action_hash,
+        target_id=decision.target_id,
+        owner_id=todo_confirm.owner_id(),
+        message_ref=draft["message_id"],
+    )
+    return create_task(request)
+
+
+def _cmd_draft_create(args: argparse.Namespace) -> int:
+    draft = todo_gate.create_draft(
+        title=args.title, notes=args.notes or "", due=args.due or "", tasklist=args.tasklist
+    )
+    channel_id, message_id = todo_confirm.post_confirmation_message(draft)
+    draft = todo_gate.set_message_id(draft, message_id, channel_id)
+    print(f"DRAFT-CREATED id={draft['id']} message={message_id}")
+    return 0
+
+
+def _cmd_draft_confirm(args: argparse.Namespace) -> int:
+    draft = todo_gate.load_draft(args.draft)
+    action = todo_confirm.resolve_reaction(draft)
+    if action == todo_confirm.CANCEL_EMOJI:
+        todo_gate.discard_draft(draft["id"])
+        print(f"DISCARDED draft={draft['id']} method=manual_reaction")
+        return 0
+    if action != todo_confirm.APPROVE_EMOJI:
+        raise todo_gate.GateError("소유자 확정 반응이 없습니다", 1)
+    task = _execute_confirmed_draft(draft)
+    todo_gate.mark_executed(draft, task_id=task.task_id)
+    print(f"EXECUTED draft={draft['id']} task={task.task_id} method=manual_reaction")
+    return 0
+
+
+def _cmd_draft_discard(args: argparse.Namespace) -> int:
+    todo_gate.discard_draft(args.draft)
+    print(f"DISCARDED draft={args.draft}")
+    return 0
+
+
+def _cmd_list_drafts(_args: argparse.Namespace) -> int:
+    for record in todo_gate.list_drafts():
+        print(
+            f"DRAFT id={record['id']} status={record['status']} title={record['title']} "
+            f"tasklist={record['tasklist']} message={record.get('message_id') or 'unposted'} "
+            f"created={record['created']}"
+        )
+    return 0
+
+
+def _cmd_watch(_args: argparse.Namespace) -> int:
+    """Production cron tick: repost pending, resolve ✅/⛔, create approved."""
+    for draft in todo_gate.list_drafts():
+        if draft.get("status") != "pending":
+            continue
+        if not draft.get("message_id"):
+            channel_id, message_id = todo_confirm.post_confirmation_message(draft)
+            draft = todo_gate.set_message_id(draft, message_id, channel_id)
+            print(f"REPOSTED draft={draft['id']} message={message_id}")
+        try:
+            action = todo_confirm.resolve_reaction(draft)
+        except todo_gate.GateError as error:
+            if error.exit_code != 1:
+                raise
+            continue  # 승인 없음 → pending 유지
+        except OSError as error:  # 429/네트워크 등 일시 오류 — draft 단위 격리, 다음 tick 재시도
+            print(f"REACTION-RETRY draft={draft['id']} err={error}", file=sys.stderr)
+            continue
+        if action == todo_confirm.CANCEL_EMOJI:
+            todo_gate.discard_draft(draft["id"])
+            todo_confirm.dm_owner(f"할일 생성 취소됨: {draft['title']}")
+            print(f"CANCELLED draft={draft['id']} method=manual_reaction")
+            continue
+        if action != todo_confirm.APPROVE_EMOJI:
+            continue
+        task = _execute_confirmed_draft(draft)
+        todo_gate.mark_executed(draft, task_id=task.task_id)
+        todo_confirm.dm_owner(f"✅ 할일 생성 완료: {draft['title']} (task {task.task_id})")
+        print(f"EXECUTED draft={draft['id']} task={task.task_id} method=manual_reaction")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="todo_cli", description="승인 게이트 경유 Google Tasks")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -294,6 +390,26 @@ def build_parser() -> argparse.ArgumentParser:
     listing = subparsers.add_parser("list")
     listing.add_argument("--tasklist", default="@default")
     listing.set_defaults(handler=_cmd_list)
+
+    draft_create = subparsers.add_parser("draft-create", help="생성 초안 + 승인 DM 게시 (Tasks에 아무것도 쓰지 않음)")
+    draft_create.add_argument("--title", required=True)
+    draft_create.add_argument("--tasklist", default="@default")
+    draft_create.add_argument("--notes", default=None)
+    draft_create.add_argument("--due", default=None)
+    draft_create.set_defaults(handler=_cmd_draft_create)
+
+    confirm = subparsers.add_parser("confirm", help="소유자 확인 검증 후에만 생성")
+    confirm.add_argument("--draft", required=True)
+    confirm.set_defaults(handler=_cmd_draft_confirm)
+
+    discard = subparsers.add_parser("discard", help="초안 폐기 (확인 거부)")
+    discard.add_argument("--draft", required=True)
+    discard.set_defaults(handler=_cmd_draft_discard)
+
+    subparsers.add_parser("list-drafts", help="초안 목록").set_defaults(handler=_cmd_list_drafts)
+    subparsers.add_parser(
+        "watch", help="프로덕션 cron tick: 승인/취소 처리 + 승인건 생성"
+    ).set_defaults(handler=_cmd_watch)
     return parser
 
 
@@ -307,6 +423,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return error.exit_code
     except TodoError as error:
         print(f"TODO-FAIL {error}", file=sys.stderr)
+        return error.exit_code
+    except todo_gate.GateError as error:
+        print(f"GATE-REFUSED {error}", file=sys.stderr)
         return error.exit_code
 
 

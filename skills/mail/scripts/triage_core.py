@@ -23,7 +23,7 @@ from typing import assert_never
 
 PIPELINE_VERSION = "mail-triage-v1"
 CATEGORIES = ("important", "normal", "spam")
-FLAG_KEYS = ("reply_needed", "schedule_needed", "budget")
+FLAG_KEYS = ("reply_needed", "schedule_needed", "budget", "todo_needed")
 PROMPT_BODY_LIMIT = 6000
 _PROMPT_MARKER = "<<<PROMPT>>>"
 INSTRUCTION_DEFAULT = "(별도 지시 없음)"
@@ -65,9 +65,14 @@ class Classification:
     budget: bool
     schedule_text: str
     reason: str
+    todo_needed: bool = False
+    todo_text: str = ""
 
     def flags(self) -> tuple[str, ...]:
-        pairs = zip(FLAG_KEYS, (self.reply_needed, self.schedule_needed, self.budget))
+        pairs = zip(
+            FLAG_KEYS,
+            (self.reply_needed, self.schedule_needed, self.budget, self.todo_needed),
+        )
         return tuple(key for key, value in pairs if value)
 
 
@@ -133,6 +138,8 @@ def parse_classification(raw: str) -> Classification:
         budget=_json_bool(payload.get("budget")),
         schedule_text=str(payload.get("schedule_text") or "").strip(),
         reason=str(payload.get("reason") or "").strip(),
+        todo_needed=_json_bool(payload.get("todo_needed")),
+        todo_text=str(payload.get("todo_text") or "").strip(),
     )
 
 

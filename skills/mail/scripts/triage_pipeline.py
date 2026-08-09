@@ -17,6 +17,7 @@ import triage_store
 from triage_transport import (
     SKILL_DIR,
     _delegate_schedule,
+    _delegate_todo,
     _env_path,
     _get_mail,
     _list_mails,
@@ -111,7 +112,7 @@ def _gate_and_classify(
         subject=subject, sender=sender, body=body, sensitive=gate.sensitive,
         uid_opaque=triage_core.mask_value(uid),
         prompt_path=_env_path(
-            "TRIAGE_CLASSIFY_PROMPT", str(SKILL_DIR / "prompts/triage-classify-v1.md")
+            "TRIAGE_CLASSIFY_PROMPT", str(SKILL_DIR / "prompts/triage-classify-v2.md")
         ),
     )
     return gate, cls
@@ -136,6 +137,11 @@ def _process_one(uid: str, rules, *, post: bool) -> tuple[str, bool, str]:
             actions.append(_delegate_schedule(cls.schedule_text, triage_core.mask_value(uid)))
         else:
             actions.append("calendar-no-text")
+    if cls.todo_needed:
+        if cls.todo_text:
+            actions.append(_delegate_todo(cls.todo_text, triage_core.mask_value(uid)))
+        else:
+            actions.append("todo-no-text")
     if cls.reply_needed:
         actions += _draft_and_post({**detail, "uid": uid}, gate, cls, post=post)  # ③④
     return ",".join(actions) or "logged", gate.sensitive, cls.category

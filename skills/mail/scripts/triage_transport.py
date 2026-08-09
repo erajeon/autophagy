@@ -72,3 +72,18 @@ def _delegate_schedule(schedule_text: str, uid_opaque: str) -> str:
         return "calendar-ambiguous"
     print(f"CAL-FAIL uid={uid_opaque} rc={proc.returncode}", file=sys.stderr)
     return "calendar-failed"
+
+
+def _delegate_todo(todo_text: str, uid_opaque: str) -> str:
+    todo_cli = _env_path("TRIAGE_TODO_CLI", "~/.hermes/skills/todo/scripts/todo_cli.py")
+    if not todo_cli.exists():
+        return "todo-unavailable"
+    proc = subprocess.run(  # noqa: S603 — owner-approval-gated delegation (draft + DM only)
+        [sys.executable, str(todo_cli), "draft-create", "--title", todo_text],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    if proc.returncode == 0:
+        match = re.search(r"^DRAFT-CREATED id=(\w+)", proc.stdout, re.M)
+        return f"todo:{match.group(1)}" if match else "todo:unknown"
+    print(f"TODO-FAIL uid={uid_opaque} rc={proc.returncode}", file=sys.stderr)
+    return "todo-failed"
