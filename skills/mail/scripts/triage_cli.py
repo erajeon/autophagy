@@ -27,6 +27,31 @@ import os
 import sys
 from pathlib import Path
 
+
+def _load_env_secrets(path: Path = Path.home() / ".env.secrets") -> None:
+    """Best-effort ``.env.secrets`` load — Hermes cron does not inject it.
+
+    Same pattern as skills/wiki/scripts/wiki_confirm_reaction_watch.py and
+    skills/todo/scripts/todo_cli.py: AUTOPHAGY_REPO_ROOT (needed by
+    triage_approval/triage_binding for the mounted-copy deployment under
+    ~/.hermes/skills/mail/scripts/) is not reliably present in the cron's
+    process environment. Never overrides an already-set variable.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+
+
+_load_env_secrets()
+
 import triage_confirm
 import triage_core
 import triage_digest
