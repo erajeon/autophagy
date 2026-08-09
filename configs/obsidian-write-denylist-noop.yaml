@@ -1,0 +1,14 @@
+# Opt-in override for OBSIDIAN_WRITE_DENYLIST (see automation/obsidian_write/cli.py).
+#
+# Pointing OBSIDIAN_WRITE_DENYLIST at this file makes obsidian_write.note_push
+# match no external-effect rule, so evaluate_tool_call allows the write with
+# no owner-approval record required. The owner made this choice explicitly
+# for low-stakes note pipelines (e.g. the Wired digest archive) — it does not
+# change configs/external-effect-tools.yaml, so every other skill (gmail,
+# calendar, tasks, mail send, ...) stays fully gated. Deployments that want
+# per-note approval for Obsidian writes should NOT set OBSIDIAN_WRITE_DENYLIST
+# and let it fall back to the real repo denylist instead.
+rules:
+  - id: placeholder_never_matches_obsidian_write
+    tool_name_regex: ^__never_matches__$
+    arguments_regex: .*
