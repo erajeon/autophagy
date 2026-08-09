@@ -40,6 +40,31 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
+
+def _load_env_secrets(path: Path = Path.home() / ".env.secrets") -> None:
+    """Best-effort ``.env.secrets`` load — Hermes cron does not inject it.
+
+    Same pattern as skills/wiki/scripts/wiki_confirm_reaction_watch.py: this
+    CLI is invoked both as a mail-triage delegation subprocess and as a cron
+    watch subprocess, and neither caller's environment reliably carries
+    AUTOPHAGY_REPO_ROOT — so this module is self-sufficient regardless of
+    caller. Never overrides an already-set variable.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+
+
+_load_env_secrets()
+
 import todo_confirm
 import todo_gate
 
