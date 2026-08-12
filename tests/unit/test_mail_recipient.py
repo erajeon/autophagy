@@ -140,11 +140,37 @@ def test_process_one_cc_only_mail_skips_reply_draft(
     assert category == "important" and sensitive is False
 
 
-def test_process_one_to_recipient_still_drafts(
+def test_process_one_to_recipient_sends_todo_reminder_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: the same verdict with the owner as a To recipient
+    # Given: the same verdict with the owner as a To recipient, reply-draft paused (default)
     monkeypatch.setenv("OWNER_EMAIL", OWNER)
+    monkeypatch.delenv("TRIAGE_REPLY_DRAFT_ENABLED", raising=False)
+    monkeypatch.setattr(triage_pipeline, "_get_mail", lambda _uid: _mail_detail(FRONTMATTER_TO))
+    monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub)
+    monkeypatch.setattr(triage_llm, "classify", _classify_stub)
+    monkeypatch.setattr(
+        triage_pipeline, "_draft_and_post",
+        lambda *args, **kwargs: pytest.fail("reply auto-draft is paused by default"),
+    )
+    reminders: list[str] = []
+    monkeypatch.setattr(
+        triage_pipeline, "_delegate_todo",
+        lambda text, _uid_opaque: reminders.append(text) or "todo:stub",
+    )
+    # When: the process path handles the mail
+    action, _sensitive, _category = triage_pipeline._process_one("u-role", (), post=False)
+    # Then: a "회신 필요" todo reminder is delegated instead of drafting a reply
+    assert reminders == ["메일 회신 필요: Synthetic subject"]
+    assert "todo:stub" in action
+
+
+def test_process_one_to_recipient_still_drafts_when_reenabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the same verdict, but the owner re-enabled reply auto-drafting
+    monkeypatch.setenv("OWNER_EMAIL", OWNER)
+    monkeypatch.setenv("TRIAGE_REPLY_DRAFT_ENABLED", "1")
     monkeypatch.setattr(triage_pipeline, "_get_mail", lambda _uid: _mail_detail(FRONTMATTER_TO))
     monkeypatch.setattr(triage_sensitivity, "evaluate", _gate_stub)
     monkeypatch.setattr(triage_llm, "classify", _classify_stub)
@@ -155,7 +181,7 @@ def test_process_one_to_recipient_still_drafts(
     )
     # When: the process path handles the mail
     action, _sensitive, _category = triage_pipeline._process_one("u-role", (), post=False)
-    # Then: the reply draft path runs unchanged
+    # Then: the reply draft path runs as before the pause
     assert drafted == ["called"]
     assert "draft:stub" in action
 

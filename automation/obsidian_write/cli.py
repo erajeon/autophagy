@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -49,11 +50,16 @@ def main() -> int:
     parser.add_argument("--body-file", required=True, help="path to a file containing the note body")
     parser.add_argument("--bucket", default="resource", choices=("project", "area", "resource", "archive"))
     parser.add_argument("--institutional", action="store_true", help="place under 001_KIMM_PARA instead of 000_PARA")
+    parser.add_argument("--subfolder", default=None, help='nest under the bucket, e.g. "Wired/Article"')
+    parser.add_argument("--tag", action="append", default=[], help="extra #tag to append (repeatable)")
     args = parser.parse_args()
 
     body = Path(args.body_file).read_text(encoding="utf-8")
+    tags = tuple(tag if tag.startswith("#") else f"#{tag}" for tag in args.tag)
+    date_prefix = datetime.now(UTC).strftime("%y%m%d")
     plan = obsidian_write.plan_note(
-        args.title, body, institutional=args.institutional, bucket_hint=args.bucket
+        args.title, body, institutional=args.institutional, bucket_hint=args.bucket,
+        subfolder=args.subfolder, tags=tags, date_prefix=date_prefix,
     )
     config = obsidian_write.load_config()
     try:
