@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import secrets
 import sys
 from dataclasses import replace
@@ -25,6 +26,16 @@ from triage_transport import (
 )
 
 DEFAULT_REPLY_PROMPT = SKILL_DIR / "prompts/reply-draft-v2.md"
+
+
+def _reply_draft_enabled() -> bool:
+    """회신 초안 자동 작성 기능 스위치 (owner 요청 2026-08-12, 기본값 보류).
+
+    보류 중에는 reply_needed 메일에 LLM 회신 초안을 작성해 승인받는 대신,
+    "회신 필요" 할일 알림만 보낸다. 재개하려면 .env.secrets 에
+    TRIAGE_REPLY_DRAFT_ENABLED=1 을 추가할 것.
+    """
+    return os.environ.get("TRIAGE_REPLY_DRAFT_ENABLED", "0") == "1"
 
 
 def _post_draft_for_approval(draft: dict, *, notice: str = "") -> str:
@@ -143,7 +154,13 @@ def _process_one(uid: str, rules, *, post: bool) -> tuple[str, bool, str]:
         else:
             actions.append("todo-no-text")
     if cls.reply_needed:
-        actions += _draft_and_post({**detail, "uid": uid}, gate, cls, post=post)  # ③④
+        if _reply_draft_enabled():
+            actions += _draft_and_post({**detail, "uid": uid}, gate, cls, post=post)  # ③④
+        else:
+            subject = detail.get("subject") or "(제목없음)"
+            actions.append(
+                _delegate_todo(f"메일 회신 필요: {subject}", triage_core.mask_value(uid))
+            )
     return ",".join(actions) or "logged", gate.sensitive, cls.category
 
 
